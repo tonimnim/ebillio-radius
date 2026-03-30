@@ -1,0 +1,21 @@
+client localhost {
+    ipaddr = 127.0.0.1
+    secret = ${RADIUS_SECRET}
+    require_message_authenticator = yes
+    nastype = other
+}
+
+client dockernet {
+    ipaddr = 172.16.0.0/12
+    secret = ${RADIUS_SECRET}
+    require_message_authenticator = yes
+    nastype = other
+}
+
+# Add specific NAS IP ranges below instead of 0.0.0.0/0
+# client mikrotik_site1 {
+#     ipaddr = 203.0.113.0/24
+#     secret = ${RADIUS_SECRET}
+#     require_message_authenticator = yes
+#     nastype = other
+# }

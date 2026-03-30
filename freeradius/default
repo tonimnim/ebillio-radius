@@ -1,0 +1,61 @@
+server default {
+    # Standard RADIUS ports
+    listen {
+        type = auth
+        ipaddr = *
+        port = 1812
+    }
+
+    listen {
+        type = acct
+        ipaddr = *
+        port = 1813
+    }
+
+    # Alternate ports for networks that block 1812/1813
+    listen {
+        type = auth
+        ipaddr = *
+        port = 8812
+    }
+
+    listen {
+        type = acct
+        ipaddr = *
+        port = 8813
+    }
+
+    authorize {
+        preprocess
+        sql
+        pap
+    }
+
+    authenticate {
+        Auth-Type PAP {
+            pap
+        }
+        Auth-Type CHAP {
+            chap
+        }
+        Auth-Type MS-CHAP {
+            mschap
+        }
+    }
+
+    preacct {
+        preprocess
+    }
+
+    accounting {
+        sql
+    }
+
+    session {
+        sql
+    }
+
+    post-auth {
+        sql
+    }
+}
