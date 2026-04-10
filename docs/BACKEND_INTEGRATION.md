@@ -220,11 +220,19 @@ The backend must know two things per session to target it:
 
 ### 5.2 How to send CoA from PHP (Laravel)
 
-**Recommended library:** [dapphp/radius](https://packagist.org/packages/dapphp/radius) — well-maintained, supports CoA/Disconnect, Message-Authenticator, the whole Attribute-Value-Pair spec.
+**Recommended library:** [dapphp/radius](https://packagist.org/packages/dapphp/radius) — well-maintained, supports CoA/Disconnect, Message-Authenticator, the whole Attribute-Value-Pair spec. This library was **validated end-to-end** against the production-hardened CoA listener in this repo (both UDP/1700 MikroTik and UDP/3799 IANA ports returned `Disconnect-ACK`). See `feature/hardening-pass-1` commit logs for the live test run.
 
 ```bash
 composer require dapphp/radius
 ```
+
+**Two API gotchas of this library you need to know about:**
+
+1. **`setAccountingPort()` is what you call for the CoA port**, NOT `setAuthenticationPort()`. The library follows the old RFC 3576 convention where CoA flowed on the accounting port. So even though you're sending a CoA/Disconnect-Request, you pass the CoA port (`1700` or `3799`) to `setAccountingPort()`. Don't let the name confuse you.
+
+2. **Call `setIncludeMessageAuthenticator(true)`** on every CoA client. Our listener enforces Blast-RADIUS hardening (CVE-2024-3596 mitigation) and drops any packet without a valid Message-Authenticator HMAC. The library computes the HMAC for you, but only if you explicitly turn it on.
+
+3. **Method names:** `disconnectRequest($timeoutSec)` and `coaRequest($timeoutSec)`. Not `sendDisconnect()` / `sendCoA()`. Both return `bool` — `true` on ACK, `false` on NAK/timeout. Check `$client->getErrorMessage()` and `$client->getErrorCode()` on failure.
 
 **Example: disconnect a subscriber mid-session**
 
@@ -237,8 +245,10 @@ public function disconnectSession(Session $session): bool
     $client = new Radius();
     $client
         ->setServer($nas->ip_address)         // e.g. '203.0.113.10'
-        ->setAuthenticationPort(1700)         // MikroTik default for CoA
+        ->setAccountingPort(1700)             // dapphp repurposes accounting port for CoA/Disconnect
+                                              //   - 1700 for MikroTik, 3799 for Cisco/Juniper/Huawei
         ->setSecret($nas->coa_secret)         // stored per-NAS, NEVER equals the auth secret
+        ->setIncludeMessageAuthenticator(true) // REQUIRED — our listener enforces Blast-RADIUS hardening
         ->setDebug(false);
 
     $client->setAttribute(1,  $session->username);            // User-Name
@@ -247,7 +257,7 @@ public function disconnectSession(Session $session): bool
     // Framed-IP-Address helps when the session ID is ambiguous
     $client->setAttribute(8,  $session->framed_ip);            // Framed-IP-Address
 
-    $ok = $client->sendDisconnect();
+    $ok = $client->disconnectRequest(3);
     if (!$ok) {
         Log::warning('CoA disconnect failed', [
             'session' => $session->id,
@@ -269,8 +279,9 @@ public function changeRateLimit(Session $session, string $newLimit): bool
     $client = new Radius();
     $client
         ->setServer($nas->ip_address)
-        ->setAuthenticationPort(1700)
-        ->setSecret($nas->coa_secret);
+        ->setAccountingPort(1700)                // CoA port, not auth port
+        ->setSecret($nas->coa_secret)
+        ->setIncludeMessageAuthenticator(true);
 
     $client->setAttribute(1,  $session->username);
     $client->setAttribute(44, $session->acct_session_id);
@@ -279,7 +290,7 @@ public function changeRateLimit(Session $session, string $newLimit): bool
     // Mikrotik-Rate-Limit VSA: vendor 14988, type 8, value is a string
     $client->setVendorSpecificAttribute(14988, 8, $newLimit);  // e.g. "20M/20M"
 
-    return $client->sendCoA();  // sends a CoA-Request, expects CoA-ACK
+    return $client->coaRequest(3);  // sends a CoA-Request, expects CoA-ACK
 }
 ```
 
@@ -292,8 +303,9 @@ public function moveToWalledGarden(Session $session): bool
     $client = new Radius();
     $client
         ->setServer($nas->ip_address)
-        ->setAuthenticationPort(1700)
-        ->setSecret($nas->coa_secret);
+        ->setAccountingPort(1700)                // CoA port, not auth port
+        ->setSecret($nas->coa_secret)
+        ->setIncludeMessageAuthenticator(true);
 
     $client->setAttribute(1,  $session->username);
     $client->setAttribute(44, $session->acct_session_id);
@@ -301,7 +313,7 @@ public function moveToWalledGarden(Session $session): bool
     // Mikrotik-Address-List VSA: vendor 14988, type 19, value is a string
     $client->setVendorSpecificAttribute(14988, 19, 'walled_garden');
 
-    return $client->sendCoA();
+    return $client->coaRequest(3);
 }
 ```
 
