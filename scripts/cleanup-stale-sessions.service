@@ -1,0 +1,16 @@
+[Unit]
+Description=eBillio FreeRADIUS stale-session cleanup
+Documentation=file:///home/bytes/ebillio-radius/docs/SIMULTANEOUS_USE.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Adjust this path to match where the eBillio repo is checked out on the host.
+ExecStart=/home/bytes/ebillio-radius/scripts/cleanup-stale-sessions.sh
+StandardOutput=append:/var/log/radius-cleanup.log
+StandardError=append:/var/log/radius-cleanup.log
+# Drop privileges if you do not need root for docker (recommended: add user
+# to the docker group, then set User= here).
+# User=ebillio
+# Group=docker

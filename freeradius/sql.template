@@ -2,7 +2,13 @@ sql {
     driver = "rlm_sql_mysql"
     dialect = "mysql"
 
-    server = "mysql"
+    # MySQL lives on the host's loopback. The freeradius container runs
+    # with network_mode: host, so 127.0.0.1 here means the Docker host
+    # itself, not the container. The DB is managed by the eBillio backend
+    # stack (ebillio-mysql container, published on 127.0.0.1:3306). See
+    # ../sql/setup-radius-on-shared-mysql.sql for the one-time user/grant
+    # setup that provisions the `radius` MySQL user we log in as below.
+    server = "127.0.0.1"
     port = 3306
     login = "${DB_USERNAME}"
     password = "${DB_PASSWORD}"

@@ -1,0 +1,28 @@
+[Unit]
+Description=Run eBillio stale-session cleanup every 5 minutes
+Documentation=file:///home/bytes/ebillio-radius/docs/SIMULTANEOUS_USE.md
+
+[Timer]
+# Run 1 minute after boot, then every 5 minutes.
+OnBootSec=1min
+OnUnitActiveSec=5min
+# Persistent: if the host was off when a run was due, run as soon as it comes back.
+Persistent=true
+Unit=cleanup-stale-sessions.service
+
+[Install]
+WantedBy=timers.target
+
+# ----------------------------------------------------------------------------
+# Install (alternative to crontab on a systemd host):
+#
+#   sudo cp scripts/cleanup-stale-sessions.service /etc/systemd/system/
+#   sudo cp scripts/cleanup-stale-sessions.timer   /etc/systemd/system/
+#   # edit the .service ExecStart= path to match your repo location
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cleanup-stale-sessions.timer
+#
+# Verify:
+#   systemctl list-timers cleanup-stale-sessions.timer
+#   journalctl -u cleanup-stale-sessions.service -f
+# ----------------------------------------------------------------------------

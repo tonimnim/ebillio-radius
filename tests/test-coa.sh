@@ -50,7 +50,7 @@ fi
 COA_SECRET="${COA_SECRET:-${RADIUS_SECRET}}"
 COA_PORT="${COA_PORT:-3799}"
 RADIUS_CONTAINER="${RADIUS_CONTAINER:-radius-server}"
-MYSQL_CONTAINER="${MYSQL_CONTAINER:-radius-mysql}"
+MYSQL_CONTAINER="${MYSQL_CONTAINER:-ebillio-mysql}"
 RADIUS_HOST="${RADIUS_HOST:-127.0.0.1}"
 
 SESSION_ID="test-coa-$(date +%s)-$$"
@@ -85,11 +85,13 @@ if docker exec "${RADIUS_CONTAINER}" sh -c "command -v ss >/dev/null 2>&1"; then
     fi
 fi
 
-# Also check the sites-enabled directory for a `type = coa` listen stanza
-# as a backup signal (does not require ss).
+# Also check the sites directories for a `type = coa` listen stanza as a
+# backup signal (does not require ss). Use grep -R (capital R) so it
+# follows symlinks -- sites-enabled/coa is typically a symlink to
+# sites-available/coa, which `grep -r` (lowercase) will not traverse.
 if (( coa_enabled == 0 )); then
     if docker exec "${RADIUS_CONTAINER}" \
-        sh -c "grep -rqsE 'type[[:space:]]*=[[:space:]]*coa' /etc/freeradius/sites-enabled/ 2>/dev/null"; then
+        sh -c "grep -RqsE 'type[[:space:]]*=[[:space:]]*coa' /etc/freeradius/sites-enabled/ /etc/freeradius/sites-available/ 2>/dev/null"; then
         coa_enabled=1
     fi
 fi
@@ -131,11 +133,16 @@ bad() { red   "  FAIL  $*"; FAIL=$((FAIL+1)); }
 # Send a Disconnect-Request
 # ---------------------------------------------------------------------------
 echo "[1] Disconnect-Request to ${RADIUS_HOST}:${COA_PORT}"
+# Message-Authenticator=0x00 is a placeholder radclient auto-fills with
+# the proper HMAC before sending. Our hardened CoA listener enforces
+# require_message_authenticator=yes (Blast-RADIUS mitigation / defense
+# in depth), so packets without this attribute are silently dropped.
 dis_pkt=$(cat <<EOF
 User-Name = "${ACCT_USER}"
 Acct-Session-Id = "${SESSION_ID}"
 NAS-IP-Address = 127.0.0.1
 Framed-IP-Address = 10.99.0.99
+Message-Authenticator = 0x00
 EOF
 )
 out=$(printf '%s\n' "${dis_pkt}" | \

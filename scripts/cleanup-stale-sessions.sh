@@ -31,12 +31,20 @@
 #   keep the stack minimal. See README / docker-compose.yml.)
 #
 # ENVIRONMENT
-#   DB_ROOT_PASSWORD   MySQL root password (preferred — UPDATE on radacct)
-#   DB_PASSWORD        Fallback: the FreeRADIUS app user's password, if it
-#                      has UPDATE on radacct (it does in the default schema).
-#   DB_USERNAME        FreeRADIUS app user (default: radius)
-#   MYSQL_CONTAINER    Docker container name (default: radius-mysql)
+#   DB_USERNAME        FreeRADIUS app user (default: radius). Must have
+#                      UPDATE on radacct — sql/restrict-privileges.sql
+#                      grants this, so the default `radius` user is fine.
+#   DB_PASSWORD        Password for the DB_USERNAME account. Read from .env.
+#   MYSQL_CONTAINER    Docker container name (default: ebillio-mysql).
+#                      This is the SHARED eBillio backend MySQL container,
+#                      not a dedicated radius-mysql.
 #   MYSQL_DATABASE     Database name (default: radius)
+#
+#   NOTE on root: this script does NOT use DB_ROOT_PASSWORD anymore. The
+#   shared ebillio-mysql container has its OWN root password (managed by
+#   the backend stack) which is different from our DB_ROOT_PASSWORD. The
+#   dedicated `radius` user has exactly the privileges needed for this
+#   cleanup (UPDATE on radacct) — see sql/restrict-privileges.sql.
 #
 #   The script sources `.env` next to docker-compose.yml if present.
 # =============================================================================
@@ -55,21 +63,18 @@ if [[ -f "${PROJECT_DIR}/.env" ]]; then
     set +a
 fi
 
-MYSQL_CONTAINER="${MYSQL_CONTAINER:-radius-mysql}"
+MYSQL_CONTAINER="${MYSQL_CONTAINER:-ebillio-mysql}"
 MYSQL_DATABASE="${MYSQL_DATABASE:-radius}"
 DB_USERNAME="${DB_USERNAME:-radius}"
 
-# Prefer root (guaranteed UPDATE privs); fall back to the app user.
-if [[ -n "${DB_ROOT_PASSWORD:-}" ]]; then
-    MYSQL_USER="root"
-    MYSQL_PASS="${DB_ROOT_PASSWORD}"
-elif [[ -n "${DB_PASSWORD:-}" ]]; then
-    MYSQL_USER="${DB_USERNAME}"
-    MYSQL_PASS="${DB_PASSWORD}"
-else
-    echo "[$(date -Is)] ERROR: neither DB_ROOT_PASSWORD nor DB_PASSWORD is set" >&2
+# Use the dedicated RADIUS app user. Its grants (UPDATE on radacct)
+# cover exactly what this script needs. See sql/restrict-privileges.sql.
+if [[ -z "${DB_PASSWORD:-}" ]]; then
+    echo "[$(date -Is)] ERROR: DB_PASSWORD is not set in ${PROJECT_DIR}/.env" >&2
     exit 1
 fi
+MYSQL_USER="${DB_USERNAME}"
+MYSQL_PASS="${DB_PASSWORD}"
 
 # Verify the mysql container is up before trying to exec into it.
 if ! docker inspect -f '{{.State.Running}}' "${MYSQL_CONTAINER}" 2>/dev/null | grep -q true; then

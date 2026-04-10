@@ -10,7 +10,7 @@
 #
 # The test row is deleted at the end regardless of pass/fail (trap EXIT).
 #
-# All MySQL access is done via `docker exec radius-mysql mysql` so the host
+# All MySQL access is done via `docker exec ebillio-mysql mysql` so the host
 # does not need a mysql client. All radclient calls run inside radius-server
 # so the host does not need radclient either.
 # ============================================================================
@@ -31,7 +31,7 @@ fi
 : "${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is not set}"
 
 RADIUS_CONTAINER="${RADIUS_CONTAINER:-radius-server}"
-MYSQL_CONTAINER="${MYSQL_CONTAINER:-radius-mysql}"
+MYSQL_CONTAINER="${MYSQL_CONTAINER:-ebillio-mysql}"
 RADIUS_HOST="${RADIUS_HOST:-127.0.0.1}"
 RADIUS_ACCT_PORT="${RADIUS_ACCT_PORT:-1813}"
 
@@ -68,9 +68,12 @@ sql_scalar() {
 }
 
 # Send an accounting packet. Attribute block comes from stdin.
+# -t 8 (8s per try) gives the SQL accounting INSERT/UPDATE plenty of
+# headroom on slow disks; the previous 3s value caused intermittent
+# Stop-packet timeouts because the UPDATE path does more work than INSERT.
 rc_acct() {
     docker exec -i "${RADIUS_CONTAINER}" \
-        radclient -x -r 1 -t 3 \
+        radclient -x -r 1 -t 8 \
             "${RADIUS_HOST}:${RADIUS_ACCT_PORT}" acct "${RADIUS_SECRET}"
 }
 
@@ -181,7 +184,11 @@ Acct-Status-Type = Stop
 Acct-Session-Id = "${SESSION_ID}"
 NAS-IP-Address = 127.0.0.1
 NAS-Port = 0
+NAS-Port-Type = Ethernet
 Framed-IP-Address = 10.99.0.99
+Acct-Authentic = RADIUS
+Calling-Station-Id = "AA:BB:CC:DD:EE:FF"
+Called-Station-Id  = "11:22:33:44:55:66"
 Acct-Session-Time   = 60
 Acct-Input-Octets   = 200000
 Acct-Output-Octets  = 800000

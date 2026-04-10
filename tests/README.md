@@ -24,7 +24,7 @@ the database, does CoA still function?".
 
 You do **not** need `radclient` or `mysql` on the host. All tests execute
 `radclient` inside the `radius-server` container and `mysql` inside the
-`radius-mysql` container via `docker exec`. The only host-side requirements
+`ebillio-mysql` container via `docker exec`. The only host-side requirements
 are `bash`, `docker`, `sed`, `awk`, and `grep`.
 
 ## Quick start

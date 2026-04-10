@@ -78,7 +78,7 @@ echo "============================================================"
 
 if (( CLEAN == 1 )); then
     yellow "--clean: wiping test data"
-    docker exec -i radius-mysql \
+    docker exec -i ebillio-mysql \
         mysql -uroot -p"${DB_ROOT_PASSWORD}" radius \
         < "${REPO_ROOT}/sql/clean-test-data.sql"
     green "test data removed"

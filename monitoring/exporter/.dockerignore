@@ -1,0 +1,6 @@
+# Nothing in this directory is sent to the build context — the source is
+# fetched from GitHub inside the builder stage. We keep the context tiny
+# to make `docker compose build` fast and to avoid accidentally leaking
+# editor files or local artefacts into the image layer cache.
+*
+!Dockerfile

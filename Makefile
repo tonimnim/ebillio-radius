@@ -13,13 +13,14 @@ include .env
 export
 endif
 
-MYSQL_CONTAINER  ?= radius-mysql
+MYSQL_CONTAINER  ?= ebillio-mysql
 RADIUS_CONTAINER ?= radius-server
 
 .DEFAULT_GOAL := help
 
 .PHONY: help up down logs seed clean-test-data test test-auth test-accounting \
-        test-coa shell-mysql shell-radius validate-config
+        test-coa shell-mysql shell-radius validate-config \
+        backfill-simultaneous-use install-cron setup-shared-mysql
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} \
@@ -81,3 +82,19 @@ shell-radius: ## Open a shell in the freeradius container
 
 validate-config: ## Run `freeradius -C` inside the container to validate config
 	docker exec -it $(RADIUS_CONTAINER) freeradius -C -d /etc/freeradius/3.0
+
+backfill-simultaneous-use: ## One-time: insert Simultaneous-Use:=1 for every existing subscriber
+	@if [ -z "$$DB_ROOT_PASSWORD" ]; then \
+	    echo "DB_ROOT_PASSWORD not set  --  populate .env first" >&2; exit 1; \
+	fi
+	@echo "Backfilling Simultaneous-Use into radcheck (idempotent)..."
+	@docker exec -i $(MYSQL_CONTAINER) \
+	    mysql -uroot -p"$$DB_ROOT_PASSWORD" radius \
+	    < sql/migrations/002_backfill_simultaneous_use.sql
+	@echo "  -> see docs/SIMULTANEOUS_USE.md for the Railway provisioning code change"
+
+install-cron: ## Install host crontab entry for the stale-session cleanup script
+	@bash scripts/install-cron.sh
+
+setup-shared-mysql: ## One-time: create radius DB + user + schema in the shared ebillio-mysql
+	@bash scripts/setup-shared-mysql.sh

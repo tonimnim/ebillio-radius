@@ -27,6 +27,14 @@ server default {
 
     authorize {
         preprocess
+        # chap / mschap here detect CHAP-Password / MS-CHAP-Challenge in the
+        # Access-Request and set Auth-Type accordingly, so the authenticate
+        # section below routes to the right handler. WITHOUT these, CHAP
+        # and MS-CHAP packets get rejected even when the password is
+        # correct in radcheck. PAP works without this because radclient
+        # and NASes typically send User-Password in the clear.
+        chap
+        mschap
         # `sql` pulls radcheck/radreply for the user. Each subscriber must
         # have `Simultaneous-Use := 1` in radcheck for the session{} block
         # below to enforce single-device login. Without that attribute
@@ -49,6 +57,13 @@ server default {
 
     preacct {
         preprocess
+        # acct_unique computes Acct-Unique-Session-Id — a hash of
+        # Acct-Session-Id + NAS-IP-Address + Client-IP-Address. The SQL
+        # accounting queries key Interim-Update and Stop UPDATEs on this
+        # value. WITHOUT this line, acctuniqueid is empty, the UPDATE
+        # never matches, and billing silently loses interim counters and
+        # stop terminate-cause. This is the canonical upstream wiring.
+        acct_unique
     }
 
     accounting {

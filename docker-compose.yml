@@ -1,77 +1,44 @@
-services:
-  mysql:
-    image: mysql:8.0
-    container_name: radius-mysql
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
-      MYSQL_DATABASE: radius
-      MYSQL_USER: ${DB_USERNAME}
-      MYSQL_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
-      - ./sql/restrict-privileges.sql:/docker-entrypoint-initdb.d/02-restrict-privileges.sql
-    command: >
-      --default-authentication-plugin=mysql_native_password
-      --innodb-buffer-pool-size=512M
-      --innodb-log-file-size=256M
-      --innodb-flush-log-at-trx-commit=2
-      --max-connections=100
-      --skip-symbolic-links
-      --skip-show-database
-      --local-infile=0
-      --secure-file-priv=/var/lib/mysql-files
-      --ssl-cert=/var/lib/mysql/server-cert.pem
-      --ssl-key=/var/lib/mysql/server-key.pem
-      --ssl-ca=/var/lib/mysql/ca.pem
-    # TLS note: MySQL 8 auto-generates self-signed certs in the datadir on
-    # first startup. The flags above point at those files so the server
-    # advertises TLS on the docker bridge. To enable strict TLS for the
-    # `radius` user, first add `tls { tls_required = yes }` to
-    # freeradius/sql.template, then uncomment the ALTER USER line in
-    # sql/restrict-privileges.sql. We deliberately do NOT set
-    # --require_secure_transport=ON here.
-    ports:
-      # Bound to 127.0.0.1 only — do NOT expose MySQL to the public interface.
-      # The previous "3306:3306" binding was a security hole. Internal RADIUS
-      # auth is unaffected because the freeradius container reaches MySQL
-      # over the docker bridge via the service name ("mysql:3306"). External
-      # clients (Railway web app, DB admin tools) must reach MySQL through an
-      # SSH tunnel, a VPN, or by running on the same host network namespace.
-      - "127.0.0.1:3306:3306"
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
+# ============================================================================
+# eBillio RADIUS — docker-compose.yml
+# ============================================================================
+# This stack runs ALONGSIDE the eBillio backend stack (Laravel/Octane + its
+# own MySQL + Redis). It does NOT start its own MySQL — instead it shares
+# the existing `ebillio-mysql` container, which already exposes 3306 on the
+# host and already has a `radius` database.
+#
+# Prerequisite: the backend's `ebillio-mysql` container must be running.
+# Verify with:  docker ps --filter name=ebillio-mysql
+#
+# First-time setup: run `sql/setup-radius-on-shared-mysql.sql` against the
+# existing MySQL to create the dedicated `radius` user, apply the hardened
+# schema, and wire up privileges. See that file's header for instructions.
+#
+# Networking: the `freeradius` service uses `network_mode: host` so it:
+#   1. Can reach the shared MySQL at 127.0.0.1:3306 directly (the host's
+#      own loopback, since ebillio-mysql publishes to 127.0.0.1:3306).
+#   2. Binds the RADIUS UDP ports (1812, 1813, 1700, 3799) and the internal
+#      Status-Server port (18121) directly on the host, with no port maps.
+# ============================================================================
 
+services:
   freeradius:
     build: ./freeradius
     container_name: radius-server
     restart: unless-stopped
+    # Host networking:
+    #   * lets the container reach 127.0.0.1:3306 (shared MySQL on the host)
+    #   * binds 1812/1813/1700/3799/18121 directly on the host (no -p needed)
+    #   * host firewall rules apply; you can filter these ports via ufw/iptables
+    network_mode: host
     environment:
       RADIUS_SECRET: ${RADIUS_SECRET}
       STATUS_SECRET: ${STATUS_SECRET}
       COA_SECRET: ${COA_SECRET}
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
-    ports:
-      - "1812:1812/udp"
-      - "1813:1813/udp"
-      # RFC 5176 Change-of-Authorization / Disconnect-Message.
-      # 3799 = IANA-assigned (Cisco/Juniper/Huawei/Nokia/...).
-      # 1700 = MikroTik RouterOS default CoA port.
-      - "3799:3799/udp"
-      - "1700:1700/udp"
-    depends_on:
-      mysql:
-        condition: service_healthy
+      # DB_HOST is baked into sql.template as 127.0.0.1 (not templated) so
+      # a typo here cannot silently redirect RADIUS to a wrong DB. If you
+      # move MySQL off localhost, edit freeradius/sql.template directly.
     cap_drop:
       - ALL
     cap_add:
@@ -94,62 +61,30 @@ services:
         max-file: "5"
 
   # ----------------------------------------------------------------------
-  # MONITORING EXPORTERS — disabled until image issue resolved.
+  # Prometheus exporter for FreeRADIUS Status-Server metrics.
   #
-  # KNOWN ISSUE (2026-04-10): the bvantagelimited/freeradius_exporter image
-  # referenced by the original config does NOT exist on Docker Hub or
-  # ghcr.io as a published artifact. The upstream Go source is at
-  # https://github.com/bvantagelimited/freeradius_exporter but the project
-  # publishes binaries, not images. Options to unblock:
-  #   (a) Add a local build stage Dockerfile that compiles the exporter
-  #       from source and references it as `build: ./monitoring/exporter`
-  #   (b) Switch to a different actively-maintained exporter (none known
-  #       to be on Docker Hub as of this date)
-  #   (c) Run the binary directly on the host via systemd, scrape from
-  #       Prometheus locally
+  # Built locally from bvantagelimited/freeradius_exporter upstream source
+  # (pinned to v0.1.9) — upstream does not publish a container image to
+  # Docker Hub or ghcr.io. See monitoring/exporter/Dockerfile.
   #
-  # Status-Server itself IS enabled and reachable on freeradius:18121 from
-  # the docker network — see freeradius/status. The healthcheck (which
-  # uses Status-Server) confirms the listener works. The only blocker is
-  # packaging the scraper. Re-enable once an image is available.
-  #
-  #freeradius_exporter:
-  #  image: bvantagelimited/freeradius_exporter:0.1.9   # NOT PUBLISHED
-  #  container_name: radius-freeradius-exporter
-  #  restart: unless-stopped
-  #  environment:
-  #    RADIUS_ADDRESS: freeradius:18121
-  #    RADIUS_SECRET: ${STATUS_SECRET}
-  #    RADIUS_TIMEOUT: "5000"
-  #  ports:
-  #    - "127.0.0.1:9812:9812"
-  #  depends_on:
-  #    freeradius:
-  #      condition: service_started
-  #
-  #mysqld_exporter:
-  #  image: prom/mysqld-exporter:v0.15.1
-  #  container_name: radius-mysqld-exporter
-  #  restart: unless-stopped
-  #  environment:
-  #    DATA_SOURCE_NAME: "exporter:${MYSQLD_EXPORTER_PASSWORD}@(mysql:3306)/"
-  #  ports:
-  #    - "127.0.0.1:9104:9104"
-  #  depends_on:
-  #    mysql:
-  #      condition: service_healthy
-
-volumes:
-  mysql_data:
-
-networks:
-  default:
-    # Pinned to a known subnet so freeradius/clients.conf.template and
-    # freeradius/status-clients.conf can rely on a stable CIDR for the
-    # `dockernet` / `status_exporter` client blocks. Without this, Docker
-    # picks a random 172.x bridge subnet per host and the dockernet client
-    # match silently fails (FreeRADIUS rejects packets from unknown clients
-    # without logging at default verbosity).
-    ipam:
-      config:
-        - subnet: 172.28.0.0/16
+  # Host networking (same as FreeRADIUS) so the exporter can reach
+  # Status-Server on 127.0.0.1:18121 directly — no bridge-subnet juggling
+  # in status-clients.conf. The exporter binds 127.0.0.1:9812 for scrape.
+  # ----------------------------------------------------------------------
+  freeradius_exporter:
+    build: ./monitoring/exporter
+    container_name: radius-freeradius-exporter
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      RADIUS_ADDRESS: 127.0.0.1:18121
+      RADIUS_SECRET: ${STATUS_SECRET}
+      RADIUS_TIMEOUT: "5000"
+    depends_on:
+      freeradius:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

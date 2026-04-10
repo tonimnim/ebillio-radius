@@ -39,7 +39,14 @@ GRANT SELECT ON radius.nas           TO 'radius'@'%';
 
 -- Accounting: interim-updates rewrite the open session row,
 -- session cleanup may delete stale entries.
-GRANT INSERT, UPDATE, DELETE ON radius.radacct TO 'radius'@'%';
+--
+-- SELECT is required in addition to the write privs because
+-- MySQL's UPDATE statement evaluates WHERE-clause columns
+-- (AcctUniqueId, acctstoptime, nasipaddress, acctstarttime) using
+-- SELECT privilege. Without it, even a pure UPDATE fails with
+-- "ERROR 1143 SELECT command denied". This is a MySQL behaviour
+-- specific to column-predicated UPDATE/DELETE.
+GRANT SELECT, INSERT, UPDATE, DELETE ON radius.radacct TO 'radius'@'%';
 
 -- Post-auth audit log: append-only. No UPDATE, no DELETE — ever.
 GRANT INSERT ON radius.radpostauth TO 'radius'@'%';

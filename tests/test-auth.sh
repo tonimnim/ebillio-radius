@@ -126,20 +126,17 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test 5: CHAP happy path  --  radclient computes CHAP-Password when you
-# supply User-Password together with a CHAP packet via the CHAP request type
-# is not directly supported; instead we send an auth packet with
-# CHAP-Password generated from User-Password. radclient does this
-# automatically if you set Auth-Type to CHAP in the input block.
+# Test 5: CHAP happy path
+#
+# radclient encodes CHAP automatically when the input contains a literal
+# `CHAP-Password = "cleartext"` string. It computes MD5(CHAP-ID || cleartext
+# || CHAP-Challenge) and replaces the value before sending. The previous
+# version of this test used `Auth-Type = CHAP` which radclient rejects --
+# Auth-Type is a server-side internal attribute, not a radclient input.
 # ---------------------------------------------------------------------------
 echo "[5] CHAP accept: testuser-chap / correct password"
-chap_input=$(cat <<'EOF'
-User-Name = "testuser-chap"
-User-Password = "testpass123"
-Auth-Type = CHAP
-EOF
-)
-out=$(printf '%s\n' "${chap_input}" | rc auth 2>&1 || true)
+out=$(printf 'User-Name = "testuser-chap"\nCHAP-Password = "testpass123"\n' \
+    | rc auth 2>&1 || true)
 if grep -q 'Received Access-Accept' <<<"${out}"; then
     ok "Access-Accept received for CHAP user"
 else
