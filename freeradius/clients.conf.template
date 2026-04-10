@@ -1,21 +1,231 @@
+#######################################################################
+#  eBillio RADIUS - clients.conf
+#
+#  FreeRADIUS 3.2.7 NAS client definitions for the eBillio AAA stack.
+#  Serves ISP subscribers across Africa (and roaming users from US,
+#  China, etc). Treat this file as critical security configuration.
+#
+#  -------------------------------------------------------------------
+#  TEMPLATING
+#  -------------------------------------------------------------------
+#  This file is a template processed by `envsubst` at container start
+#  time (see docker-entrypoint.sh). Any ${VAR} placeholder is expanded
+#  from the environment. Currently only ${RADIUS_SECRET} is supported
+#  by the entrypoint; adding new variables requires updating
+#  docker-entrypoint.sh as well.
+#
+#  ${RADIUS_SECRET} is the ONLY secret injected from the environment
+#  and should be considered a bootstrap / lab secret. Production NAS
+#  devices MUST each have their own unique, long, random secret -
+#  never reuse ${RADIUS_SECRET} across real NAS devices.
+#
+#  -------------------------------------------------------------------
+#  SECURITY MODEL
+#  -------------------------------------------------------------------
+#  1. Per-NAS unique secrets. Every physical NAS (Mikrotik, Cisco,
+#     Huawei, etc.) gets its own `secret`. If one device is
+#     compromised, the blast radius is limited to that device.
+#
+#  2. Never use 0.0.0.0/0. Only list exact NAS IPs or the tightest
+#     possible subnet for a managed POP. A permissive client block is
+#     equivalent to leaving RADIUS open to the internet.
+#
+#  3. Never reuse secrets. Do not copy/paste the same `secret` across
+#     client blocks. Generate fresh ones, e.g.:
+#         openssl rand -base64 32
+#
+#  4. Blast-RADIUS mitigation (CVE-2024-3596). Every client block
+#     MUST set `require_message_authenticator = yes`. This forces
+#     clients to include the Message-Authenticator attribute on all
+#     Access-Request packets and closes the Blast-RADIUS MD5 collision
+#     attack. Mikrotik RouterOS 7.15+ and most modern NAS firmware
+#     support this - upgrade any device that does not.
+#
+#  5. Connection limits. `limit { ... }` caps the number of concurrent
+#     sockets and idle time per client, protecting the server from a
+#     misbehaving or compromised NAS.
+#
+#  6. Explicit `proto = udp`. Stated explicitly now so that future
+#     RadSec (RADIUS-over-TLS) migration is a clean diff: those
+#     clients will be `proto = tcp` inside a TLS listener.
+#
+#  -------------------------------------------------------------------
+#  HOW TO ADD A PRODUCTION NAS
+#  -------------------------------------------------------------------
+#  You MUST add your real production NAS devices before going live.
+#  Two options:
+#
+#    (a) Static: copy one of the commented Mikrotik examples below,
+#        give it a unique shortname, ipaddr and secret, and uncomment.
+#
+#    (b) Dynamic: enable SQL-backed NAS loading by setting
+#        `read_clients = yes` in mods-enabled/sql and populating the
+#        `nas` table in MySQL. See the note at the bottom of this
+#        file. This is the recommended approach once you have more
+#        than a handful of NAS devices.
+#
+#  References:
+#    - CVE-2024-3596 / Blast-RADIUS: https://www.blastradius.fail/
+#    - FreeRADIUS clients.conf docs: man clients.conf
+#######################################################################
+
+
+#######################################################################
+#  localhost - local radclient / health-check testing
+#
+#  Used by radclient from inside the container for smoke tests and
+#  by any sidecar health-check tooling. Do NOT point external devices
+#  at this block.
+#######################################################################
 client localhost {
-    ipaddr = 127.0.0.1
-    secret = ${RADIUS_SECRET}
+    ipaddr                        = 127.0.0.1
+    proto                         = udp
+    secret                        = ${RADIUS_SECRET}
+    shortname                     = localhost
+    nastype                       = other
     require_message_authenticator = yes
-    nastype = other
+
+    limit {
+        max_connections = 16
+        idle_timeout    = 30
+    }
 }
 
+
+#######################################################################
+#  dockernet - other containers on the same Docker bridge network
+#
+#  This block permits sibling containers (e.g. an admin panel, a
+#  monitoring/exporter container, or a test harness) to speak RADIUS
+#  to FreeRADIUS over the internal Docker bridge.
+#
+#  The compose network is pinned to 172.28.0.0/16 in docker-compose.yml
+#  (see the `networks.default.ipam.config.subnet` block). If you change
+#  that, update this CIDR to match. Verify with:
+#
+#      docker network inspect ebillio-radius_default \
+#          --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
+#
+#  Do NOT widen this back to 172.16.0.0/12 - that covers the entire
+#  Docker default range and any rogue container on the host would be
+#  accepted as a NAS.
+#######################################################################
 client dockernet {
-    ipaddr = 172.16.0.0/12
-    secret = ${RADIUS_SECRET}
+    ipaddr                        = 172.28.0.0/16
+    proto                         = udp
+    secret                        = ${RADIUS_SECRET}
+    shortname                     = dockernet
+    nastype                       = other
     require_message_authenticator = yes
-    nastype = other
+
+    limit {
+        max_connections = 16
+        idle_timeout    = 30
+    }
 }
 
-# Add specific NAS IP ranges below instead of 0.0.0.0/0
-# client mikrotik_site1 {
-#     ipaddr = 203.0.113.0/24
-#     secret = ${RADIUS_SECRET}
-#     require_message_authenticator = yes
-#     nastype = other
-# }
+
+#######################################################################
+#  PRODUCTION NAS EXAMPLES (commented out)
+#
+#  The three blocks below are templates for real Mikrotik RouterOS
+#  NAS devices at ISP POPs. Copy, uncomment, and edit per site.
+#  Each block MUST have its own unique, freshly generated secret -
+#  do NOT reuse ${RADIUS_SECRET} in production.
+#
+#  Generate a secret with:
+#      openssl rand -base64 32
+#
+#  On the Mikrotik side, ensure:
+#      /radius  set [find] accounting-backup=yes \
+#                          require-message-auth=yes-required
+#  (RouterOS 7.15+) so that Message-Authenticator is always sent.
+#######################################################################
+
+# -------- Nairobi POP 1 (Kenya) --------
+#client nas-nairobi-pop1 {
+#    ipaddr                        = 203.0.113.10
+#    proto                         = udp
+#    secret                        = CHANGE_ME_unique_per_nas_use_openssl_rand
+#    shortname                     = nbo-pop1
+#    nastype                       = mikrotik
+#    require_message_authenticator = yes
+#
+#    limit {
+#        max_connections = 16
+#        idle_timeout    = 30
+#    }
+#}
+
+# -------- Lagos POP 1 (Nigeria) --------
+#client nas-lagos-pop1 {
+#    ipaddr                        = 203.0.113.20
+#    proto                         = udp
+#    secret                        = CHANGE_ME_unique_per_nas_use_openssl_rand
+#    shortname                     = los-pop1
+#    nastype                       = mikrotik
+#    require_message_authenticator = yes
+#
+#    limit {
+#        max_connections = 16
+#        idle_timeout    = 30
+#    }
+#}
+
+# -------- Johannesburg POP 1 (South Africa) --------
+#client nas-johannesburg-pop1 {
+#    ipaddr                        = 203.0.113.30
+#    proto                         = udp
+#    secret                        = CHANGE_ME_unique_per_nas_use_openssl_rand
+#    shortname                     = jnb-pop1
+#    nastype                       = mikrotik
+#    require_message_authenticator = yes
+#
+#    limit {
+#        max_connections = 16
+#        idle_timeout    = 30
+#    }
+#}
+
+
+#######################################################################
+#  SCALING: load NAS devices dynamically from MySQL
+#  -------------------------------------------------------------------
+#  For deployments with more than a handful of NAS devices, managing
+#  client blocks by hand in this file becomes painful. FreeRADIUS can
+#  instead load clients from the `nas` table in the radius database.
+#
+#  To enable:
+#
+#    1. In raddb/mods-enabled/sql, set:
+#           read_clients = yes
+#           client_table = "nas"
+#
+#    2. Ensure the `nas` table exists (it ships with the default
+#       freeradius MySQL schema - mysql/schema.sql or similar). Its
+#       columns are: id, nasname, shortname, type, ports, secret,
+#       server, community, description.
+#
+#    3. Insert one row per NAS, e.g.:
+#           INSERT INTO nas
+#               (nasname, shortname, type, secret, description)
+#           VALUES
+#               ('203.0.113.10', 'nbo-pop1', 'mikrotik',
+#                '<openssl rand -base64 32>', 'Nairobi POP 1');
+#
+#    4. Restart FreeRADIUS (or send HUP) to reload.
+#
+#  NOTE: SQL-loaded clients do NOT currently honour
+#  `require_message_authenticator` via the schema in FreeRADIUS 3.x
+#  (the column does not exist in the default `nas` table). You have
+#  two options:
+#
+#    (a) Add a `require_message_authenticator` column to `nas` and
+#        patch the client query in mods-enabled/sql, OR
+#    (b) Keep security-critical or legacy NAS devices as static
+#        blocks in THIS file where the attribute is enforced, and
+#        only push well-behaved modern Mikrotiks to SQL.
+#
+#  Until (a) is done, prefer static blocks here for anything that
+#  matters - the Blast-RADIUS mitigation is not optional.
+#######################################################################

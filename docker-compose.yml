@@ -19,11 +19,29 @@ services:
       --innodb-flush-log-at-trx-commit=2
       --max-connections=100
       --skip-symbolic-links
+      --skip-show-database
       --local-infile=0
+      --secure-file-priv=/var/lib/mysql-files
+      --ssl-cert=/var/lib/mysql/server-cert.pem
+      --ssl-key=/var/lib/mysql/server-key.pem
+      --ssl-ca=/var/lib/mysql/ca.pem
+    # TLS note: MySQL 8 auto-generates self-signed certs in the datadir on
+    # first startup. The flags above point at those files so the server
+    # advertises TLS on the docker bridge. To enable strict TLS for the
+    # `radius` user, first add `tls { tls_required = yes }` to
+    # freeradius/sql.template, then uncomment the ALTER USER line in
+    # sql/restrict-privileges.sql. We deliberately do NOT set
+    # --require_secure_transport=ON here.
     ports:
-      - "3306:3306"
+      # Bound to 127.0.0.1 only — do NOT expose MySQL to the public interface.
+      # The previous "3306:3306" binding was a security hole. Internal RADIUS
+      # auth is unaffected because the freeradius container reaches MySQL
+      # over the docker bridge via the service name ("mysql:3306"). External
+      # clients (Railway web app, DB admin tools) must reach MySQL through an
+      # SSH tunnel, a VPN, or by running on the same host network namespace.
+      - "127.0.0.1:3306:3306"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -39,11 +57,18 @@ services:
     restart: unless-stopped
     environment:
       RADIUS_SECRET: ${RADIUS_SECRET}
+      STATUS_SECRET: ${STATUS_SECRET}
+      COA_SECRET: ${COA_SECRET}
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
     ports:
       - "1812:1812/udp"
       - "1813:1813/udp"
+      # RFC 5176 Change-of-Authorization / Disconnect-Message.
+      # 3799 = IANA-assigned (Cisco/Juniper/Huawei/Nokia/...).
+      # 1700 = MikroTik RouterOS default CoA port.
+      - "3799:3799/udp"
+      - "1700:1700/udp"
     depends_on:
       mysql:
         condition: service_healthy
@@ -56,11 +81,75 @@ services:
       - DAC_OVERRIDE
       - CHOWN
       - FOWNER
+    healthcheck:
+      test: ["CMD", "/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     logging:
       driver: json-file
       options:
         max-size: "50m"
         max-file: "5"
 
+  # ----------------------------------------------------------------------
+  # MONITORING EXPORTERS — disabled until image issue resolved.
+  #
+  # KNOWN ISSUE (2026-04-10): the bvantagelimited/freeradius_exporter image
+  # referenced by the original config does NOT exist on Docker Hub or
+  # ghcr.io as a published artifact. The upstream Go source is at
+  # https://github.com/bvantagelimited/freeradius_exporter but the project
+  # publishes binaries, not images. Options to unblock:
+  #   (a) Add a local build stage Dockerfile that compiles the exporter
+  #       from source and references it as `build: ./monitoring/exporter`
+  #   (b) Switch to a different actively-maintained exporter (none known
+  #       to be on Docker Hub as of this date)
+  #   (c) Run the binary directly on the host via systemd, scrape from
+  #       Prometheus locally
+  #
+  # Status-Server itself IS enabled and reachable on freeradius:18121 from
+  # the docker network — see freeradius/status. The healthcheck (which
+  # uses Status-Server) confirms the listener works. The only blocker is
+  # packaging the scraper. Re-enable once an image is available.
+  #
+  #freeradius_exporter:
+  #  image: bvantagelimited/freeradius_exporter:0.1.9   # NOT PUBLISHED
+  #  container_name: radius-freeradius-exporter
+  #  restart: unless-stopped
+  #  environment:
+  #    RADIUS_ADDRESS: freeradius:18121
+  #    RADIUS_SECRET: ${STATUS_SECRET}
+  #    RADIUS_TIMEOUT: "5000"
+  #  ports:
+  #    - "127.0.0.1:9812:9812"
+  #  depends_on:
+  #    freeradius:
+  #      condition: service_started
+  #
+  #mysqld_exporter:
+  #  image: prom/mysqld-exporter:v0.15.1
+  #  container_name: radius-mysqld-exporter
+  #  restart: unless-stopped
+  #  environment:
+  #    DATA_SOURCE_NAME: "exporter:${MYSQLD_EXPORTER_PASSWORD}@(mysql:3306)/"
+  #  ports:
+  #    - "127.0.0.1:9104:9104"
+  #  depends_on:
+  #    mysql:
+  #      condition: service_healthy
+
 volumes:
   mysql_data:
+
+networks:
+  default:
+    # Pinned to a known subnet so freeradius/clients.conf.template and
+    # freeradius/status-clients.conf can rely on a stable CIDR for the
+    # `dockernet` / `status_exporter` client blocks. Without this, Docker
+    # picks a random 172.x bridge subnet per host and the dockernet client
+    # match silently fails (FreeRADIUS rejects packets from unknown clients
+    # without logging at default verbosity).
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

@@ -1,1 +1,52 @@
+# ---------------------------------------------------------------------------
+# eBillio FreeRADIUS .gitignore
+# ---------------------------------------------------------------------------
+# Secrets must NEVER be committed. See docs/SECRETS.md for the security model.
+# ---------------------------------------------------------------------------
+
+# Runtime data
 mysql_data/
+*.log
+logs/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+*.secrets
+secrets/
+.secrets/
+
+# Credentials / keys
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+*.kdbx
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-*
+
+# Python / tooling caches (defensive; no Python code here today)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Backups / temp
+*.bak
+*.orig
+*.tmp
+tmp/

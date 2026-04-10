@@ -1,0 +1,160 @@
+######################################################################
+#
+#  eBillio FreeRADIUS - RFC 5176 CoA / Disconnect virtual server
+#  ------------------------------------------------------------
+#
+#  Purpose
+#  -------
+#  This virtual server receives Change-of-Authorization (CoA-Request)
+#  and Disconnect-Request packets from the eBillio billing app and
+#  relays them through FreeRADIUS so subscribers can be kicked,
+#  re-planed, or walled-garden'ed without waiting for the next
+#  Access-Request. This is THE critical feature for the billing
+#  platform - without it, non-payers cannot be removed mid-session.
+#
+#  Reference: RFC 5176 - Dynamic Authorization Extensions to RADIUS
+#             https://datatracker.ietf.org/doc/html/rfc5176
+#
+#  Why TWO listen ports (3799 AND 1700)?
+#  -------------------------------------
+#  - UDP/3799 is the IANA-assigned port for RFC 5176 (most vendors:
+#    Cisco, Juniper, Huawei, Nokia, ...).
+#  - UDP/1700 is the MikroTik default port for CoA/Disconnect. A
+#    large share of ISP CPEs/BRASes in our target markets are
+#    MikroTik RouterOS, so we MUST listen on 1700 as well.
+#  Binding both means the same virtual server handles CoA requests
+#  regardless of which vendor dialect the billing app uses.
+#
+#  Separate shared secret (${COA_SECRET})
+#  --------------------------------------
+#  The CoA shared secret MUST be different from the main RADIUS auth
+#  secret (${RADIUS_SECRET}). This is enforced by:
+#    - a separate env var COA_SECRET in docker-compose.yml
+#    - a separate client file (coa-clients.conf) with
+#      require_message_authenticator = yes
+#  Rotating the CoA secret must never require rotating the auth
+#  secret and vice versa.
+#
+#  How the billing app sends CoA
+#  -----------------------------
+#  Two supported patterns:
+#
+#  1. radclient (shell / cron / simple jobs) - see
+#     scripts/coa/disconnect-user.sh and scripts/coa/change-bandwidth.sh
+#
+#  2. pyrad (Python billing app) - example:
+#       https://github.com/pyradius/pyrad
+#       from pyrad.client import Client
+#       from pyrad.dictionary import Dictionary
+#       import pyrad.packet
+#       c = Client(server="nas.example.net", acctport=3799,
+#                  secret=b"...", dict=Dictionary("dictionary"))
+#       req = c.CreateCoAPacket(code=pyrad.packet.DisconnectRequest,
+#                               User_Name="alice",
+#                               Acct_Session_Id="00000042")
+#       c.SendPacket(req)
+#
+#  Common RFC 5176 Error-Cause codes
+#  ---------------------------------
+#   201  Residual Session Context Removed
+#   401  Unsupported-Attribute
+#   402  Missing-Attribute
+#   403  NAS-Identification-Mismatch
+#   404  Invalid-Request
+#   405  Unsupported-Service
+#   406  Unsupported-Extension
+#   407  Invalid-Attribute-Value
+#   501  Administratively-Prohibited
+#   502  Request-Not-Routable (proxy)
+#   503  Session-Context-Not-Found     <-- most common: wrong Acct-Session-Id
+#   504  Session-Context-Not-Removable
+#   505  Other-Proxy-Processing-Error
+#   506  Resources-Unavailable
+#   507  Request-Initiated
+#   508  Multiple-Session-Selection-Unsupported
+#
+#  3.2.7 syntax note
+#  -----------------
+#  In FreeRADIUS 3.2.x, there is NO separate recv-disconnect /
+#  send-disconnect section. Both CoA-Request and Disconnect-Request
+#  packets are handled by the single recv-coa / send-coa pair. The
+#  listen block lives at TOP LEVEL (not nested inside server {}) and
+#  references the virtual server via virtual_server = coa.
+#
+######################################################################
+
+#
+#  Listener on IANA-assigned RFC 5176 port 3799 (Cisco, Juniper,
+#  Huawei, Nokia, Ruckus, etc.)
+#
+listen {
+	type = coa
+	ipaddr = *
+	port = 3799
+	virtual_server = coa
+
+	#  Use a per-socket client list with its own shared secret,
+	#  separate from the auth/acct clients.conf. See
+	#  coa-clients.conf (included below) for the definition.
+	clients = coa_clients
+}
+
+#
+#  Listener on MikroTik default CoA port 1700. Many RouterOS-based
+#  ISPs send Disconnect-Request here instead of 3799.
+#
+listen {
+	type = coa
+	ipaddr = *
+	port = 1700
+	virtual_server = coa
+	clients = coa_clients
+}
+
+#
+#  Pull in the CoA-only client list. This file is rendered from
+#  coa-clients.conf.template by docker-entrypoint.sh using envsubst
+#  so ${COA_SECRET} is substituted at container start.
+#
+#  NOTE: $INCLUDE inside sites-enabled/ resolves relative to THIS
+#  file's directory (sites-enabled/), not /etc/freeradius/. So we
+#  must use an absolute path here.
+#
+$INCLUDE /etc/freeradius/coa-clients.conf
+
+server coa {
+	#
+	#  recv-coa runs for BOTH CoA-Request AND Disconnect-Request
+	#  packets (FreeRADIUS 3.2.x does not have a separate
+	#  recv-disconnect section). Use the Packet-Type attribute to
+	#  branch if you need different logic per packet type.
+	#
+	recv-coa {
+		#  Example: branch on packet type.
+		#
+		#  if (&Packet-Type == "Disconnect-Request") {
+		#      # disconnect-specific policy
+		#  }
+		#  else {
+		#      # CoA-Request specific policy (bandwidth change,
+		#      # VLAN change, walled-garden, etc.)
+		#  }
+
+		#  Proxying based on Operator-Name realm. Harmless if the
+		#  billing app never sets Operator-Name.
+		suffix
+
+		#  Always accept for now. The billing app is trusted
+		#  (authenticated by shared secret + Message-Authenticator)
+		#  and is responsible for policy.
+		ok
+	}
+
+	#
+	#  send-coa runs for BOTH CoA-ACK/NAK and Disconnect-ACK/NAK
+	#  replies being sent back to the originator.
+	#
+	send-coa {
+		ok
+	}
+}

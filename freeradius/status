@@ -1,0 +1,85 @@
+######################################################################
+#
+#  eBillio FreeRADIUS - Status-Server virtual server (RFC 5997)
+#
+#  RFC 5997 - Use of Status-Server Packets in the RADIUS Protocol
+#  https://datatracker.ietf.org/doc/html/rfc5997
+#
+#  Purpose:
+#    - Expose a dedicated Status-Server listener so NAS devices can
+#      perform liveness probes without sending fake Access-Request
+#      packets, and so the Prometheus exporter can scrape statistics.
+#
+#  Port:
+#    - Default Status-Server port is UDP/18121.
+#    - A socket of type "status" accepts ONLY Status-Server packets;
+#      auth/acct packets to this port are silently ignored (by design).
+#    - Conversely, Status-Server packets sent to type=auth/acct
+#      listeners are ignored because radiusd.conf ships with
+#      status_server = no (the safe default).
+#
+#  Message-Authenticator:
+#    - RFC 5997 REQUIRES the Message-Authenticator attribute on every
+#      Status-Server request. FreeRADIUS enforces this automatically
+#      and will drop packets that lack it. Clients listed in
+#      status-clients.conf therefore set require_message_authenticator = yes.
+#
+#  Clients:
+#    - Status queries are restricted via an explicit clients file
+#      (status-clients.conf). We do NOT rely on the globally-defined
+#      NAS clients - exposing statistics to every NAS would leak
+#      internal server state.
+#
+#  Test command (run from inside the freeradius container or from a
+#  host that matches a status client subnet):
+#
+#      echo "Message-Authenticator=0x00,FreeRADIUS-Statistics-Type=0x1f" \
+#          | radclient -x localhost:18121 status $STATUS_SECRET
+#
+#  WARNING (per Jisc advisory on Status-Server rollout):
+#    Once a NAS is configured to probe a RADIUS server with
+#    Status-Server, it will mark the server DEAD as soon as probes
+#    stop being answered. Verify this virtual server is reachable
+#    and responsive BEFORE enabling Status-Server probing on any
+#    production NAS fleet.
+#
+#  References:
+#    - https://wiki.freeradius.org/config/Status
+#    - raddb/sites-available/status (upstream FreeRADIUS 3.2.x)
+#
+######################################################################
+
+#  Load the restricted Status-Server client ACL. The file is
+#  rendered from status-clients.conf.template by docker-entrypoint.sh.
+$INCLUDE /etc/freeradius/status-clients.conf
+
+server status {
+	listen {
+		#  ONLY Status-Server packets are accepted on this socket.
+		#  All other RADIUS packet types are silently dropped.
+		type = status
+
+		#  Bind on all interfaces so the Prometheus exporter
+		#  container (on the docker bridge network) can reach
+		#  this port. Access is still gated by status-clients.conf.
+		ipaddr = *
+		port = 18121
+
+		#  Restrict which clients may query Status-Server.
+		#  This overrides the globally-defined clients.conf so
+		#  that NAS devices cannot read server statistics.
+		clients = status_clients
+	}
+
+	#  Simple authorize section - return ok for Status-Server.
+	#  The "Autz-Type Status-Server" subsection is the canonical
+	#  hook used by FreeRADIUS 3.2.x to respond to statistics
+	#  queries (see raddb/sites-available/default).
+	authorize {
+		ok
+
+		Autz-Type Status-Server {
+			ok
+		}
+	}
+}

@@ -1,0 +1,33 @@
+{
+  "_comment": "PLACEHOLDER -- this is NOT a real Grafana dashboard JSON export. Import the dashboard from grafana.com at runtime instead of vendoring it here (see instructions below).",
+  "dashboard": {
+    "id": 19891,
+    "title": "FreeRADIUS",
+    "source": "https://grafana.com/grafana/dashboards/19891-freeradius/",
+    "maintainer": "bvantagelimited",
+    "datasource": "prometheus",
+    "alternative_dashboards": [
+      {
+        "id": 19111,
+        "title": "FreeRADIUS (alternative)",
+        "source": "https://grafana.com/grafana/dashboards/19111"
+      }
+    ]
+  },
+  "import_instructions": {
+    "via_ui": [
+      "Open Grafana -> Dashboards -> New -> Import.",
+      "Enter the dashboard ID: 19891 (or 19111 as an alternative).",
+      "Click 'Load'.",
+      "Select your Prometheus datasource (expected name: 'prometheus').",
+      "Click 'Import'."
+    ],
+    "via_api": [
+      "curl -fsSL https://grafana.com/api/dashboards/19891/revisions/latest/download -o /tmp/freeradius.json",
+      "curl -s -u admin:admin -H 'Content-Type: application/json' \\",
+      "  -d @<(jq '{dashboard: ., overwrite: true, inputs: [{name: \"DS_PROMETHEUS\", type: \"datasource\", pluginId: \"prometheus\", value: \"prometheus\"}]}' /tmp/freeradius.json) \\",
+      "  http://localhost:3000/api/dashboards/import"
+    ],
+    "vendoring": "If you need to vendor the dashboard JSON in-repo (for air-gapped installs), download it with curl from the URL above and replace the contents of this file with the downloaded JSON."
+  }
+}

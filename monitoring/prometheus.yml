@@ -1,0 +1,35 @@
+# Minimal Prometheus scrape configuration for the eBillio RADIUS stack.
+#
+# This file is intended for a Prometheus instance that is either:
+#   (a) running in the SAME docker network as docker-compose.yml (recommended),
+#       in which case the target hostnames `freeradius_exporter` and
+#       `mysqld_exporter` resolve via docker-compose DNS, OR
+#   (b) running OUTSIDE docker on the same host, in which case you should
+#       replace the targets with `host.docker.internal:9812` / `127.0.0.1:9812`
+#       and `127.0.0.1:9104` (the ports are bound to 127.0.0.1 in the compose
+#       file).
+#
+# See monitoring/README.md for the full stack architecture and alerting hints.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    stack: ebillio-radius
+
+scrape_configs:
+  - job_name: freeradius
+    static_configs:
+      - targets: ['freeradius_exporter:9812']
+        labels:
+          service: freeradius
+
+  - job_name: mysql
+    static_configs:
+      - targets: ['mysqld_exporter:9104']
+        labels:
+          service: mysql
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']

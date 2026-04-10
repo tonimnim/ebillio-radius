@@ -1,0 +1,136 @@
+######################################################################
+#
+#  eBillio FreeRADIUS - originate-coa (outbound CoA/Disconnect)
+#  ------------------------------------------------------------
+#
+#  This file is the OUTBOUND counterpart to the `coa` virtual server
+#  (which is the INBOUND listener). It defines:
+#
+#    - a `home_server` of type "coa" for each NAS FreeRADIUS should
+#      send CoA-Request / Disconnect-Request packets TO,
+#    - an optional `home_server_pool coa` to group them,
+#    - a virtual server `originate-coa.example.com` that processes
+#      the outbound proxy-request and the NAS's proxy-reply.
+#
+#  PRIMARY USAGE PATTERN IN eBillio
+#  --------------------------------
+#  The billing app sends CoA/Disconnect directly using radclient or
+#  pyrad (see scripts/coa/disconnect-user.sh and the pyrad example
+#  in freeradius/coa). That is the preferred path because it avoids
+#  a round-trip through FreeRADIUS proxying and lets the billing app
+#  handle retries/Error-Cause inspection directly.
+#
+#  This file is provided for the secondary pattern where FreeRADIUS
+#  itself originates a CoA during an Access-Request / Accounting-
+#  Request using:
+#
+#      update coa {
+#          &User-Name       = "%{User-Name}"
+#          &Acct-Session-Id = "%{Acct-Session-Id}"
+#          &NAS-IP-Address  = "%{NAS-IP-Address}"
+#      }
+#
+#  or the Disconnect variant:
+#
+#      update disconnect {
+#          &User-Name       = "%{User-Name}"
+#          &Acct-Session-Id = "%{Acct-Session-Id}"
+#      }
+#
+#  The CoA packet is then routed through the home_server_pool coa
+#  defined below.
+#
+#  NOTE: The example home_server ipaddr (192.0.2.42) is RFC 5737
+#  documentation space. Replace with the real NAS IP before enabling
+#  this site. Until edited, this file is safe to ship disabled.
+#
+#  References:
+#  - https://github.com/FreeRADIUS/freeradius-server/blob/v3.2.x/raddb/sites-available/originate-coa
+#  - RFC 5176
+#
+######################################################################
+
+#
+#  Define a CoA home_server per NAS. The secret here is the secret
+#  the NAS expects from US (FreeRADIUS) when we push CoA to it -
+#  NOT the ${COA_SECRET} that protects inbound CoA from the billing
+#  app. Put real per-NAS secrets in proxy.conf or in a sql-backed
+#  dynamic_client store in production.
+#
+home_server example-coa {
+	type = coa
+
+	#  MUST be a real NAS IP - cannot point at a virtual_server.
+	ipaddr = 192.0.2.42
+	port = 3799
+
+	#  The secret the target NAS expects. MUST NOT equal any of:
+	#    - ${RADIUS_SECRET} (main auth/acct secret)
+	#    - ${COA_SECRET}    (inbound CoA from billing app)
+	secret = change_me_per_nas
+
+	coa {
+		irt = 2    # initial retransmit timer (seconds)
+		mrt = 16   # max retransmit timer
+		mrc = 5    # max retransmit count
+		mrd = 30   # max retransmit duration
+	}
+}
+
+#
+#  Pool - allows fail-over / load-balance across multiple CoA home
+#  servers, and ties the responses to the originate-coa virtual
+#  server below.
+#
+home_server_pool coa {
+	type = fail-over
+	home_server = example-coa
+	virtual_server = originate-coa.example.com
+}
+
+#
+#  Virtual server that runs when FreeRADIUS is ORIGINATING the CoA.
+#  The outbound CoA packet lives in the proxy-request list. The
+#  reply (CoA-ACK / CoA-NAK / Disconnect-ACK / Disconnect-NAK) lives
+#  in proxy-reply.
+#
+server originate-coa.example.com {
+	pre-proxy {
+		#  Stamp our NAS-IP-Address onto the outbound packet if
+		#  the target NAS insists on it. Adjust per deployment.
+		update proxy-request {
+			NAS-IP-Address = 192.0.2.42
+		}
+	}
+
+	post-proxy {
+		switch &proxy-reply:Packet-Type {
+			case CoA-ACK {
+				ok
+			}
+			case CoA-NAK {
+				#  Inspect &proxy-reply:Error-Cause to learn
+				#  why (503 = Session-Context-Not-Found, etc.)
+				ok
+			}
+			case Disconnect-ACK {
+				ok
+			}
+			case Disconnect-NAK {
+				ok
+			}
+			case {
+				fail
+			}
+		}
+
+		#  Called when the NAS never responds at all.
+		Post-Proxy-Type Fail-CoA {
+			ok
+		}
+
+		Post-Proxy-Type Fail-Disconnect {
+			ok
+		}
+	}
+}

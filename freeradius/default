@@ -27,6 +27,10 @@ server default {
 
     authorize {
         preprocess
+        # `sql` pulls radcheck/radreply for the user. Each subscriber must
+        # have `Simultaneous-Use := 1` in radcheck for the session{} block
+        # below to enforce single-device login. Without that attribute
+        # FreeRADIUS will not call session{} at all.
         sql
         pap
     }
@@ -51,6 +55,14 @@ server default {
         sql
     }
 
+    # Simultaneous-Use enforcement.
+    # When a user has `Simultaneous-Use := N` in radcheck, FreeRADIUS runs
+    # this section during Access-Request to count currently-open sessions
+    # (rows in radacct where acctstoptime IS NULL) for that username. If
+    # the count is >= N the Access-Request is rejected. `sql` here points
+    # at the simul_count_query defined in mods-available/sql. Stale rows
+    # in radacct will therefore cause false rejections — they are closed
+    # by scripts/cleanup-stale-sessions.sh running from cron every 5 min.
     session {
         sql
     }
