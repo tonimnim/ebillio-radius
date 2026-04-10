@@ -20,7 +20,8 @@ RADIUS_CONTAINER ?= radius-server
 
 .PHONY: help up down logs seed clean-test-data test test-auth test-accounting \
         test-coa shell-mysql shell-radius validate-config \
-        backfill-simultaneous-use install-cron setup-shared-mysql
+        backfill-simultaneous-use install-cron setup-shared-mysql \
+        hardening-alter
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} \
@@ -98,3 +99,15 @@ install-cron: ## Install host crontab entry for the stale-session cleanup script
 
 setup-shared-mysql: ## One-time: create radius DB + user + schema in the shared ebillio-mysql
 	@bash scripts/setup-shared-mysql.sh
+
+hardening-alter: ## Apply the radacct hardening ALTER (BIGINT UNSIGNED, indexes, partitioning) - idempotent
+	@if [ -z "$$DB_ROOT_PASSWORD" ]; then \
+	    echo "DB_ROOT_PASSWORD not set. Set it to the BACKEND ebillio-mysql root password" >&2; \
+	    echo "(not our rotated one) and re-run. See .env.example for the docs." >&2; \
+	    exit 1; \
+	fi
+	@echo "Applying sql/migrations/003_hardening_alter_existing_tables.sql..."
+	@docker exec -i -e MYSQL_PWD="$$DB_ROOT_PASSWORD" $(MYSQL_CONTAINER) \
+	    mysql -uroot radius < sql/migrations/003_hardening_alter_existing_tables.sql \
+	    | grep -v "Warning" || true
+	@echo "  -> see the verification report above for the new state"
