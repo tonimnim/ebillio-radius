@@ -13,8 +13,13 @@ include .env
 export
 endif
 
-MYSQL_CONTAINER  ?= ebillio-mysql
+MYSQL_CONTAINER  ?= radius-mysql
 RADIUS_CONTAINER ?= radius-server
+
+# Compose file: use standalone (with MySQL) by default; override with
+# COMPOSE_FILE=docker-compose.yml for shared-mysql mode.
+COMPOSE_FILE ?= docker-compose.standalone.yml
+export COMPOSE_FILE
 
 .DEFAULT_GOAL := help
 
