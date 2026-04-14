@@ -25,6 +25,23 @@ server default {
         port = 8813
     }
 
+    # ISP-bypass ports. Some African mobile/fixed ISPs block UDP 1812/1813
+    # and 8812/8813 at their edge (treating them as "unusual" protocols).
+    # UDP 443 (QUIC / HTTP/3) and UDP 4433 are virtually never filtered,
+    # so we expose RADIUS on them as a last-resort fallback. MikroTiks
+    # behind such ISPs should set authentication-port=443 acct-port=4433.
+    listen {
+        type = auth
+        ipaddr = *
+        port = 443
+    }
+
+    listen {
+        type = acct
+        ipaddr = *
+        port = 4433
+    }
+
     authorize {
         preprocess
         # chap / mschap here detect CHAP-Password / MS-CHAP-Challenge in the
