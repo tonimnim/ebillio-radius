@@ -14,6 +14,7 @@ COPY default                     /etc/freeradius/sites-enabled/default
 COPY status                      /etc/freeradius/sites-available/status
 COPY coa                         /etc/freeradius/sites-available/coa
 COPY originate-coa               /etc/freeradius/sites-available/originate-coa
+COPY dynamic-clients             /etc/freeradius/sites-available/dynamic-clients
 
 # --- Security hardening (see security.conf for CVE-2024-3596 / Blast-RADIUS rationale) ---
 COPY security.conf               /etc/freeradius/security.conf
@@ -39,18 +40,21 @@ RUN mkdir -p /etc/freeradius/templates \
     && ln -sf /etc/freeradius/sites-available/status        /etc/freeradius/sites-enabled/status \
     && ln -sf /etc/freeradius/sites-available/coa           /etc/freeradius/sites-enabled/coa \
     && ln -sf /etc/freeradius/sites-available/originate-coa /etc/freeradius/sites-enabled/originate-coa \
+    && ln -sf /etc/freeradius/sites-available/dynamic-clients /etc/freeradius/sites-enabled/dynamic-clients \
     && chown -R freerad:freerad \
         /etc/freeradius/templates \
         /etc/freeradius/sites-enabled/default \
         /etc/freeradius/sites-available/status \
         /etc/freeradius/sites-available/coa \
         /etc/freeradius/sites-available/originate-coa \
+        /etc/freeradius/sites-available/dynamic-clients \
     && chmod 640 \
         /etc/freeradius/templates/* \
         /etc/freeradius/sites-enabled/default \
         /etc/freeradius/sites-available/status \
         /etc/freeradius/sites-available/coa \
         /etc/freeradius/sites-available/originate-coa \
+        /etc/freeradius/sites-available/dynamic-clients \
     && chmod +x /docker-entrypoint.sh /healthcheck.sh
 
 ENTRYPOINT ["/docker-entrypoint.sh"]

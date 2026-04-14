@@ -126,6 +126,43 @@ client dockernet {
 
 
 #######################################################################
+#  DYNAMIC CLIENTS POOL (for ebillio tenant routers)
+#  -------------------------------------------------------------------
+#  Accepts RADIUS packets from any IPv4 source. For each new source
+#  IP, FreeRADIUS runs a SQL lookup against the `nas` table (see the
+#  `dynamic_clients` virtual server in sites-enabled/dynamic-clients).
+#  If a row exists where `nasname` = source IP, the row's `secret` is
+#  loaded, the packet signature is validated, and the client is cached
+#  for `lifetime` seconds. No row → silent drop.
+#
+#  Why this is safe with ipaddr = 0.0.0.0/0:
+#    * FreeRADIUS rate-limits new dynamic client creation to 1/sec
+#      (hardcoded, DoS protection).
+#    * Shared secret per-NAS is a strong random 40+ char string —
+#      brute-force infeasible.
+#    * require_message_authenticator = yes forces MA on every packet
+#      (Blast-RADIUS / CVE-2024-3596 mitigation).
+#    * A packet from an IP with no matching `nas` row is discarded
+#      silently — no amplification, no leak.
+#
+#  Interaction with backend heartbeat:
+#    * Router bootstraps → backend writes nas.nasname = public IP.
+#    * Router's IP changes → backend heartbeat UPDATEs nas.nasname.
+#    * Cache expires after `lifetime` → next packet re-runs SQL lookup
+#      at the new IP. Self-healing, no FreeRADIUS reload needed.
+#
+#  Worst-case auth outage during IP rotation:
+#    lifetime + (heartbeat interval) = ~6 minutes (tunable).
+#######################################################################
+client ebillio_dynamic_pool {
+    ipaddr           = 0.0.0.0/0
+    netmask          = 0
+    dynamic_clients  = dynamic_clients
+    lifetime         = 300
+}
+
+
+#######################################################################
 #  PRODUCTION NAS EXAMPLES (commented out)
 #
 #  The three blocks below are templates for real Mikrotik RouterOS

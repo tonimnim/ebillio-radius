@@ -1,0 +1,49 @@
+# ============================================================================
+# eBillio RADIUS - dynamic-clients virtual server
+# ============================================================================
+# Triggered by the `ebillio_dynamic_pool` client block in clients.conf when
+# a RADIUS packet arrives from a source IP not matched by any static client.
+#
+# The request processed here is SYNTHETIC (empty) — the ONLY trustworthy
+# field is Packet-Src-IP-Address (the real source IP of the incoming UDP
+# datagram). We use it as the key to look up the NAS row in `nas` and
+# populate the FreeRADIUS-Client-* control attributes so FreeRADIUS can
+# construct a live client and validate the original packet.
+#
+# If the SQL lookup returns no row, control attributes stay unset and
+# FreeRADIUS drops the packet silently (no client created).
+#
+# Four SELECTs look chatty, but this path runs once per new source IP
+# every `lifetime` seconds (300s in clients.conf). The SQL connection
+# pool handles it cheaply.
+#
+# References:
+#   - /etc/freeradius/sites-available/dynamic-clients (upstream example)
+#   - FreeRADIUS wiki: https://wiki.freeradius.org/config/Dynamic-Clients
+# ============================================================================
+
+server dynamic_clients {
+    authorize {
+        # Guard: only proceed if a row exists for this source IP.
+        # Using LIMIT 1 so a duplicate entry (should not happen given the
+        # backend's upsert logic, but defense in depth) still returns a
+        # deterministic single row.
+        if ("%{sql: SELECT 1 FROM nas WHERE nasname = '%{Packet-Src-IP-Address}' LIMIT 1}") {
+            update control {
+                &FreeRADIUS-Client-IP-Address = "%{Packet-Src-IP-Address}"
+                &FreeRADIUS-Client-Shortname  = "%{sql: SELECT shortname FROM nas WHERE nasname = '%{Packet-Src-IP-Address}' LIMIT 1}"
+                &FreeRADIUS-Client-Secret     = "%{sql: SELECT secret    FROM nas WHERE nasname = '%{Packet-Src-IP-Address}' LIMIT 1}"
+                &FreeRADIUS-Client-NAS-Type   = "%{sql: SELECT type      FROM nas WHERE nasname = '%{Packet-Src-IP-Address}' LIMIT 1}"
+
+                # Force Message-Authenticator on dynamic clients regardless of
+                # global default. Blast-RADIUS / CVE-2024-3596 mitigation.
+                &FreeRADIUS-Client-Require-MA = yes
+            }
+            ok
+        }
+        else {
+            # No matching NAS row. Let FreeRADIUS drop the packet.
+            reject
+        }
+    }
+}
